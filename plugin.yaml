@@ -13,7 +13,7 @@ description: >
   a coherent set of operational rules.
 author: Reverb Software Solutions
 license: MIT
-homepage: https://github.com/reverb-ss/hermes-northstar
+homepage: https://github.com/mrcoxis-2002/hermes-northstar
 tags: [coherence, audit, guardrails, instructions, conflicts]
 
 provides_tools:

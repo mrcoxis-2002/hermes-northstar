@@ -153,4 +153,4 @@ The audit uses deterministic pattern matching, not semantic analysis:
 - **License:** MIT (see `LICENSE`).
 - **Version:** 0.1.0
 - **Status:** Active development. The plugin is functional and validated, but enforcement mode, tool availability checking, and confidence calibration are planned future work.
-- **Repository:** `https://github.com/reverb-ss/hermes-northstar` (availability not yet verified).
+- **Repository:** `https://github.com/mrcoxis-2002/hermes-northstar` (availability not yet verified).
