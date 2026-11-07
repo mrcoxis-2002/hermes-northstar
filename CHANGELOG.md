@@ -5,36 +5,36 @@
 ### What works
 - **northstar_audit** tool: Scans instruction sources for contradictions, duplicate directives, and stale file references
 - **northstar_status** tool: Shows plugin status and last audit results
-- **pre_llm_call** hook: Injects compact coherence guidance on first turn when audit findings exist
-- **pre_tool_call** hook: Registered but inactive (enforcement not yet implemented)
+- **pre_llm_call** hook: On the first turn of a session, injects compact coherence guidance when a cached audit (from a previous `northstar_audit` call in the same process) has errors or warnings. It does not run an audit automatically.
 - **Demo fixture**: `fixtures/conflicting-demo/` with `python -m northstar.demo`
 
 ### Audit capabilities
-- Duplicate directive detection (near-duplicate lines across files)
-- Same-file contradiction detection (regex-based pattern pairs)
+- Duplicate directive detection (normalized text comparison across files; YAML frontmatter metadata is excluded)
+- Same-file contradiction detection (predefined allow/deny pattern pairs)
 - Cross-file contradiction detection (directive conflicts between files)
-- Stale file reference detection (non-existent paths in instruction files)
+- Scope-aware contradiction classification (contradictions with different scope qualifiers are downgraded to warnings for human review)
+- Stale file reference detection (non-existent paths in instruction files; context-aware: skips markdown links, code blocks, inline code, doc cross-references, and URLs)
+- Archived directory exclusion (`.archive`, `.backup`, `deprecated`, etc.)
+- Duplicate finding consolidation
+- Windows and Unix-style path handling
+- Markdown code-fence handling
 - JSON and text output formats
 
 ### Test coverage
-- 34 tests, all passing
-- Discovery: 6 tests (hermes home, project, skills, empty, unreadable, dedup)
-- Audit: 14 tests (clean config, duplicates, contradictions, stale refs, reports, false positives)
-- Tools: 4 tests (audit with/without sources, status with/without audit)
-- Registration: 3 tests (no crash, tool names, hook names)
-- Hooks: 4 tests (pre_llm_call variants, pre_tool_call no crash)
-- Input validation: 3 tests (empty scope, invalid scope, empty args)
+- 96 automated tests, all passing
+- Covers discovery, audit logic, tools, registration, hooks, scope-aware contradictions, and input validation
+- Official Hermes Plugin Doctor and catalog validation passing
 
 ### Known limitations
-- Contradiction detection is regex-based and cannot distinguish scoped directives (e.g., "ask for production" vs "proceed without asking for test files")
+- Contradiction detection is pattern-based and cannot distinguish novel or implicitly scoped directives
 - Tool availability check requires Hermes runtime access (skipped)
 - Model reference validation requires provider API access (skipped)
-- pre_tool_call enforcement hook is a no-op placeholder
-- Confidence levels are all "medium" or "low" — no calibration against ground truth
+- Confidence levels are heuristic — not calibrated against ground truth
+- Enforcement mode (`enforce_mode`, `protected_paths`) is declared in the config schema but not yet implemented
 
 ### Next release tasks
-- Implement pre_tool_call enforcement mode (warn/block)
-- Add scope-aware contradiction detection to reduce false positives
+- Implement enforcement mode (warn/block)
+- Add scope-aware contradiction detection refinements to reduce false positives
 - Calibrate confidence levels with ground-truth test cases
 - Wire config_schema enforcement settings to actual behavior
 - Add tool availability check via Hermes runtime introspection

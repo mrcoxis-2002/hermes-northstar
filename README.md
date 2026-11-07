@@ -1,85 +1,156 @@
 # Hermes Northstar Plugin
 
-Deterministic coherence audit for Hermes Agent instruction sources. Scans SOUL.md, SKILL.md, and other instruction files for contradictions, duplicate directives, and stale file references — then injects findings as context on the first turn of each session.
+Northstar is a native Hermes Agent plugin that audits your instruction sources for coherence. It scans SOUL.md, SKILL.md, project instruction files, and configuration for contradictory directives, duplicate instructions, and stale file references — then reports findings with severity levels and suggested fixes.
 
-## What Is Implemented
+Northstar is **read-only**: it detects and reports problems in your instructions. It never edits, rewrites, or automatically repairs any instruction file.
 
-### Tools
+## Quick Demonstration
 
-| Tool | Description |
-|------|-------------|
-| `northstar_audit` | Scans instruction sources for contradictions, duplicates, stale references. Accepts `scope` (home/project/skills/all) and `output` (json/text) args. |
-| `northstar_status` | Returns plugin status and last audit results as JSON. |
-
-### Hook
-
-| Hook | Description |
-|------|-------------|
-| `pre_llm_call` | On the first turn of each session, injects a compact coherence guidance block when audit findings exist. Matches the Hermes hook contract: `(session_id, user_message, conversation_history, is_first_turn, model, platform, **kwargs)`. |
-
-### Audit Checks
-
-- **Duplicate directive detection** — Near-duplicate lines across files (Levenshtein similarity > 0.85)
-- **Same-file contradiction detection** — Regex-based pattern pairs within a single file
-- **Cross-file contradiction detection** — Directive conflicts between files
-- **Stale file reference detection** — Non-existent file paths mentioned in instruction files
-- **Scope-aware contradiction classification** — Directives governing different scopes (e.g., "production files" vs "test files") are flagged as warnings requiring human review, not errors
-
-### Output
-
-- JSON and text report formats
-- Confidence levels: `high`, `medium`, `low`
-- Severity levels: `error`, `warning`, `info`
-
-## Heuristic Limitations
-
-The audit uses regex-based pattern matching, not semantic analysis. Known limitations:
-
-1. **Scope detection is pattern-based** — Recognizes common scope qualifiers (production/test/dev/config/new file/routine task/CI-CD) but may miss custom or implicit scopes. Unrecognized scopes are reported as possible conflicts requiring human review.
-2. **Contradiction patterns are finite** — Only predefined verb/phrase pairs are checked (e.g., "always" vs "never", "require approval" vs "without asking"). Novel contradictions may be missed.
-3. **Duplicate detection uses Levenshtein similarity** — Semantically identical but differently worded directives may not be caught.
-4. **Stale reference check is filesystem-only** — Cannot detect references to external URLs, database entries, or dynamically generated paths.
-5. **Confidence calibration** — Confidence levels are heuristic, not calibrated against ground truth.
-
-## Planned (Not Yet Implemented)
-
-- `pre_tool_call` enforcement mode (warn/block on tool calls conflicting with audit findings)
-- Tool availability check via Hermes runtime introspection
-- Model reference validation against provider API
-- Confidence level calibration with ground-truth test cases
-- Configurable enforcement settings wired to actual behavior
-
-## Installation
+The repository ships a demo fixture with two synthetic instruction files that contain deliberate conflicts. Run it from the repository root:
 
 ```bash
-# Copy plugin directory to Hermes plugins path
-cp -r hermes-northstar ~/.hermes/plugins/northstar
-
-# Or develop in-place
-ln -s /path/to/hermes-northstar ~/.hermes/plugins/northstar
-```
-
-## Usage
-
-```bash
-# Run the demo audit
 python -m northstar.demo
-
-# Run tests
-python -m pytest tests/ -v
-
-# Manual audit (via Hermes tools)
-# In Hermes: /northstar_audit scope=all output=json
 ```
 
-## Demo Fixture
+Expected output:
 
-`fixtures/conflicting-demo/` contains synthetic instruction files with known contradictions for testing:
+- **2 sources** inspected (`ExampleCore.md`, `ExampleBehavior.md`)
+- **5 findings**, including **1 error** (a cross-file contradiction where one file allows what the other denies)
 
-- `ExampleCore.md` — Core directives
-- `ExampleBehavior.md` — Behavior rules (includes cross-file contradictions with ExampleCore.md)
-- `README.md` — Explanatory text (excluded from audit scan)
+The fixture lives in `fixtures/conflicting-demo/`:
 
-## Test Coverage
+- `ExampleCore.md` — core directives
+- `ExampleBehavior.md` — behavior rules (contains cross-file contradictions with ExampleCore.md)
+- `README.md` — explanatory text (excluded from the audit scan)
 
-52 tests covering discovery, audit logic, tools, registration, hooks, scope-aware contradictions, and input validation.
+## Features and Detection Categories
+
+| Category | What it detects |
+|----------|-----------------|
+| `duplicate` | Near-duplicate directive lines appearing in multiple instruction files (normalized text comparison; YAML frontmatter metadata is excluded) |
+| `contradiction` | Conflicting directives within a single file and across files, using predefined allow/deny pattern pairs (e.g., "require approval" vs "without asking") |
+| `stale_reference` | File path references in instruction files that do not resolve to an existing file (context-aware: skips markdown links, code blocks, inline code, doc cross-references, and URLs) |
+
+Additional behaviors:
+
+- **Scope-aware contradiction classification** — when both sides of a contradiction carry different scope qualifiers (e.g., "production files" vs "test files"), the finding is downgraded to a warning with low confidence, flagged for human review rather than reported as a definite error.
+- **Severity levels** — `error`, `warning`, `info`.
+- **Confidence levels** — `high`, `medium`, `low` (heuristic, not calibrated against ground truth).
+- **Report formats** — human-readable text or machine-readable JSON.
+- **Archived directory exclusion** — directories named `.archive`, `.backup`, `deprecated`, etc. are skipped by default.
+
+## Installation and Enablement
+
+Northstar is a native Hermes plugin. Install it with the Hermes CLI:
+
+```bash
+hermes plugin install /path/to/hermes-northstar
+```
+
+Or copy the plugin directory into your Hermes plugins path:
+
+```bash
+cp -r hermes-northstar ~/.hermes/plugins/northstar
+```
+
+After installation, restart Hermes (or start a new session) so the plugin registers its tools and hook. Verify it is active:
+
+```bash
+hermes plugin list
+```
+
+## Tool Usage
+
+### `northstar_audit`
+
+Run a coherence audit on instruction sources.
+
+| Parameter | Type | Values | Default |
+|-----------|------|--------|---------|
+| `scope` | string | `full`, `home`, `project`, `skills` | `full` |
+| `output_format` | string | `text`, `json` | `text` |
+
+- `scope: "full"` — scans Hermes home, project root, and skills
+- `scope: "home"` — scans Hermes home only
+- `scope: "project"` — scans project root only
+- `scope: "skills"` — scans the skills directory only
+
+Example:
+
+```
+northstar_audit scope=full output_format=json
+```
+
+### `northstar_status`
+
+Show current plugin status.
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `include_last_audit` | boolean | `false` |
+
+Returns plugin name, version, enforcement mode, and protected paths. With `include_last_audit: true`, it also returns the results of the most recent `northstar_audit` call (or a note if no audit has been run yet).
+
+## Hook Behavior
+
+Northstar registers one hook: `pre_llm_call`.
+
+On the **first turn of a session**, the hook checks whether a cached audit result exists (from a previous `northstar_audit` call in the same process). It does **not** automatically run an audit. If relevant cached findings exist (errors or warnings), it returns a compact advisory context block (capped at 2000 characters) summarizing the top findings and pointing to `northstar_audit` for full details. If no cached audit exists, or the audit was clean, the hook returns nothing and the turn proceeds normally.
+
+The hook matches the standard Hermes `pre_llm_call` contract: `(session_id, user_message, conversation_history, is_first_turn, model, platform, **kwargs)`.
+
+## Architecture
+
+```
+hermes-northstar/
+├── plugin.yaml          # Plugin manifest (name, version, tools, hooks, config schema)
+├── northstar/
+│   ├── __init__.py      # Plugin registration: wires tools and the pre_llm_call hook
+│   ├── schemas.py       # Tool parameter schemas (what the LLM sees)
+│   ├── tools.py         # Tool handlers: northstar_audit, northstar_status
+│   ├── discovery.py     # Instruction source discovery and classification
+│   ├── audit.py         # Deterministic audit checks and report generation
+│   └── demo.py          # Runnable demo against the conflicting fixture
+├── fixtures/
+│   └── conflicting-demo/  # Synthetic instruction files with known conflicts
+└── tests/
+    └── test_northstar.py  # Automated test suite
+```
+
+Data flow:
+
+1. **Discovery** (`discovery.py`) finds instruction sources in Hermes home, project root, and skills, classifies each file (`instruction`, `config`, `skill`), and excludes archived directories.
+2. **Audit** (`audit.py`) runs the detection checks over the discovered sources and produces an `AuditReport` with findings, severity, confidence, and per-category counts.
+3. **Tools** (`tools.py`) expose the audit to the LLM via `northstar_audit` and `northstar_status`, and cache the last report in process memory.
+4. **Hook** (`__init__.py`) reads the cached report on the first turn and optionally injects compact advisory context.
+
+## Testing and Validation
+
+- **96 automated tests** covering discovery, audit logic, tools, registration, hooks, scope-aware contradictions, and input validation.
+- Official **Plugin Doctor** and plugin validation passed.
+- Baseline commit: `dec9074`.
+
+Run the test suite:
+
+```bash
+python -m pytest tests/ -v
+```
+
+## Known Limitations
+
+The audit uses deterministic pattern matching, not semantic analysis:
+
+1. **Contradiction patterns are finite** — only predefined allow/deny phrase pairs are checked (e.g., "always confirm" vs "skip confirm"). Novel contradictions may be missed.
+2. **Scope detection is pattern-based** — recognizes common scope qualifiers (production/test/dev/config/new file/routine task/CI-CD) but may miss custom or implicit scopes. Unrecognized scopes are reported as possible conflicts requiring human review.
+3. **Duplicate detection is text-normalization based** — semantically identical but differently worded directives may not be caught.
+4. **Stale reference check is filesystem-only** — cannot detect references to external URLs, database entries, or dynamically generated paths.
+5. **Confidence levels are heuristic** — not calibrated against ground truth.
+6. **Tool availability and model reference checks are skipped** — they require Hermes runtime or provider API access, which the audit does not have. They are listed in the report under "checks skipped."
+7. **No enforcement** — Northstar is read-only. The `enforce_mode` and `protected_paths` config keys exist in the schema but enforcement behavior is not yet implemented.
+
+## License and Project Status
+
+- **License:** MIT (see `LICENSE`).
+- **Version:** 0.1.0
+- **Status:** Active development. The plugin is functional and validated, but enforcement mode, tool availability checking, and confidence calibration are planned future work.
+- **Repository:** `https://github.com/reverb-ss/hermes-northstar` (availability not yet verified).
