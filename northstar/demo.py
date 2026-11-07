@@ -18,9 +18,14 @@ def main():
         print(f"Fixture directory not found: {fixture_dir}")
         sys.exit(1)
 
-    # Discover .md files in fixture
+    # Discover only synthetic instruction files in fixture (not README.md)
+    # README.md is explanatory text, not an instruction source — including it
+    # causes false positives in the contradiction detector.
+    INSTRUCTION_FILES = {"ExampleCore.md", "ExampleBehavior.md"}
     sources = []
     for md_file in sorted(fixture_dir.glob("*.md")):
+        if md_file.name not in INSTRUCTION_FILES:
+            continue
         content = md_file.read_text(encoding="utf-8")
         source_type = classify_source(md_file)
         sources.append(InstructionSource(md_file, content, source_type))

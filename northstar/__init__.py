@@ -9,18 +9,23 @@ from .audit import run_audit
 logger = logging.getLogger(__name__)
 
 
-def _on_pre_tool_call(tool_name: str, args: dict, **kwargs):
-    """Hook: intercept tool calls when enforcement is active.
+def _on_pre_llm_call(
+    session_id: str,
+    user_message: str,
+    conversation_history: list,
+    is_first_turn: bool,
+    model: str,
+    platform: str,
+    **kwargs,
+):
+    """Hook: inject compact coherence guidance on first turn.
 
-    NOTE: Enforcement is not yet implemented for MVP. This hook is registered
-    but does nothing. Remove this function and its registration when
-    enforcement mode is fully implemented and tested.
+    Matches the Hermes pre_llm_call contract:
+    (session_id, user_message, conversation_history, is_first_turn, model, platform, **kwargs)
+
+    Returns None to skip, {"context": "..."} to inject, or
+    {"action": "block", "message": "..."} to veto the turn.
     """
-    pass
-
-
-def _on_pre_llm_call(session_id: str, is_first_turn: bool, **kwargs):
-    """Hook: inject compact coherence guidance on first turn."""
     # Only inject on first turn to avoid repeating every turn
     if not is_first_turn:
         return None
@@ -81,7 +86,6 @@ def register(ctx):
     )
 
     # Register hooks
-    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
 
     logger.info("Northstar plugin registered successfully")

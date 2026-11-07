@@ -21,7 +21,6 @@ provides_tools:
   - northstar_status
 
 provides_hooks:
-  - pre_tool_call  # Registered but inactive for MVP (enforcement not yet implemented)
   - pre_llm_call
 
 config_schema:

@@ -232,11 +232,12 @@ class TestAudit:
         assert len(findings) == 0
 
     def test_no_false_positive_single_file_conditional(self):
-        """Conditional directives in one file may still trigger — known limitation.
+        """Scoped directives in one file should not be flagged as contradictory.
 
-        The regex-based contradiction detector cannot distinguish scoped directives
-        (e.g., production vs test). This test documents the current behavior:
-        scoped contradictions are flagged and require manual review.
+        'Always ask for confirmation before modifying production files' and
+        'For test files, proceed without asking' govern different scopes
+        (production vs test). The scope-aware detector should recognize this
+        and NOT flag it as a contradiction.
         """
         from northstar.audit import check_contradictions
 
@@ -246,11 +247,12 @@ class TestAudit:
         )
         sources = [self._make_source("AGENTS.md", content)]
         findings = check_contradictions(sources)
-        # Current behavior: flags this as a contradiction (known limitation).
-        # A future improvement would parse scope qualifiers to reduce false positives.
-        assert len(findings) == 1
-        assert findings[0].category == "contradiction"
-        assert findings[0].confidence == "medium"  # Not "high" — heuristic
+        # Should NOT flag this as a contradiction — different scopes
+        error_findings = [f for f in findings if f.severity == "error"]
+        assert len(error_findings) == 0, (
+            f"Expected no error findings for scoped directives, got {len(error_findings)}: "
+            f"{[f.evidence for f in error_findings]}"
+        )
 
     def test_no_false_positive_cross_file_complementary(self):
         """Complementary instructions across files should not contradict."""
@@ -380,8 +382,8 @@ class TestPluginRegistration:
 
         # Verify tools were registered
         assert ctx.register_tool.call_count == 2
-        # Verify hooks were registered
-        assert ctx.register_hook.call_count == 2
+        # Verify hooks were registered (only pre_llm_call)
+        assert ctx.register_hook.call_count == 1
 
     def test_register_tool_names(self):
         from unittest.mock import MagicMock
@@ -404,8 +406,9 @@ class TestPluginRegistration:
 
         calls = ctx.register_hook.call_args_list
         names = [c[0][0] for c in calls]
-        assert "pre_tool_call" in names
         assert "pre_llm_call" in names
+        # pre_tool_call is not registered — enforcement not yet implemented
+        assert "pre_tool_call" not in names
 
 
 # --- Hook tests ---
@@ -416,7 +419,14 @@ class TestHooks:
         from northstar import tools
         tools._last_audit = None
 
-        result = northstar._on_pre_llm_call(session_id="test", is_first_turn=True)
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=True,
+            model="test",
+            platform="cli",
+        )
         assert result is None
 
     def test_pre_llm_call_not_first_turn(self):
@@ -424,7 +434,14 @@ class TestHooks:
         from northstar import tools
         tools._last_audit = {"findings": [{"severity": "error"}]}
 
-        result = northstar._on_pre_llm_call(session_id="test", is_first_turn=False)
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=False,
+            model="test",
+            platform="cli",
+        )
         assert result is None
 
     def test_pre_llm_call_with_errors(self):
@@ -441,17 +458,56 @@ class TestHooks:
             ]
         }
 
-        result = northstar._on_pre_llm_call(session_id="test", is_first_turn=True)
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=True,
+            model="test",
+            platform="cli",
+        )
         assert result is not None
         assert "context" in result
         assert "Northstar" in result["context"]
         assert "conflict" in result["context"].lower()
 
-    def test_pre_tool_call_no_crash(self):
+    def test_pre_llm_call_with_full_contract(self):
+        """Verify pre_llm_call accepts the full Hermes hook contract."""
         import northstar
+        from northstar import tools
+        tools._last_audit = None
 
-        # Should not raise
-        northstar._on_pre_tool_call(tool_name="terminal", args={"command": "ls"})
+        # Should not crash with full contract params
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[{"role": "user", "content": "Hello"}],
+            is_first_turn=True,
+            model="anthropic/claude-sonnet-4-6",
+            platform="cli",
+        )
+        assert result is None  # No audit cached
+
+    def test_pre_llm_call_plain_string_return(self):
+        """Verify pre_llm_call returns dict with context key, not plain string."""
+        import northstar
+        from northstar import tools
+        tools._last_audit = {
+            "findings": [
+                {"severity": "error", "category": "contradiction", "source_file": "/test.md", "explanation": "Test"}
+            ]
+        }
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=True,
+            model="test",
+            platform="cli",
+        )
+        assert isinstance(result, dict)
+        assert "context" in result
+        assert isinstance(result["context"], str)
 
 
 # --- Input validation tests ---
@@ -484,3 +540,255 @@ class TestInputValidation:
         result = tools.northstar_status({})
         data = json.loads(result)
         assert data["plugin"] == "northstar"
+
+
+# --- Regression tests for reliability hardening ---
+
+class TestScopeAwareContradictions:
+    """Regression tests for scope-aware contradiction detection."""
+
+    def _make_source(self, name: str, content: str, source_type: str = "instruction"):
+        from northstar.discovery import InstructionSource
+        return InstructionSource(Path(name), content, source_type)
+
+    def test_production_vs_test_same_file_no_error(self):
+        """Production vs test scope qualifiers should not produce error findings."""
+        from northstar.audit import check_contradictions
+
+        content = (
+            "Always ask for confirmation before modifying production files.\n"
+            "For test files, proceed without asking.\n"
+        )
+        sources = [self._make_source("AGENTS.md", content)]
+        findings = check_contradictions(sources)
+        errors = [f for f in findings if f.severity == "error"]
+        assert len(errors) == 0
+
+    def test_production_vs_test_same_file_warning(self):
+        """Production vs test may produce a warning for human review."""
+        from northstar.audit import check_contradictions
+
+        content = (
+            "Always ask for confirmation before modifying production files.\n"
+            "For test files, proceed without asking.\n"
+        )
+        sources = [self._make_source("AGENTS.md", content)]
+        findings = check_contradictions(sources)
+        # May have a warning-level finding for human review
+        warnings = [f for f in findings if f.severity == "warning"]
+        # At minimum, no errors
+        errors = [f for f in findings if f.severity == "error"]
+        assert len(errors) == 0
+
+    def test_same_scope_still_detected(self):
+        """Contradictions without scope qualifiers should still be detected as errors."""
+        from northstar.audit import check_contradictions
+
+        content = (
+            "Always ask for confirmation before modifying files.\n"
+            "But modify files without asking when in autonomous mode.\n"
+        )
+        sources = [self._make_source("SOUL.md", content)]
+        findings = check_contradictions(sources)
+        errors = [f for f in findings if f.severity == "error"]
+        assert len(errors) > 0
+
+    def test_cross_file_different_scopes_no_error(self):
+        """Cross-file contradictions with different scopes should not be errors."""
+        from northstar.audit import check_contradictions
+
+        sources = [
+            self._make_source("SOUL.md", "Always require human approval for production changes."),
+            self._make_source("AGENTS.md", "For test files, work autonomously without human approval."),
+        ]
+        findings = check_contradictions(sources)
+        errors = [f for f in findings if f.severity == "error"]
+        assert len(errors) == 0
+
+    def test_cross_file_same_scope_still_error(self):
+        """Cross-file contradictions without scope qualifiers should still be errors."""
+        from northstar.audit import check_contradictions
+
+        sources = [
+            self._make_source("SOUL.md", "Always require human approval for changes."),
+            self._make_source("AGENTS.md", "Work autonomously without human approval."),
+        ]
+        findings = check_contradictions(sources)
+        errors = [f for f in findings if f.severity == "error"]
+        assert len(errors) > 0
+
+    def test_scope_qualifier_extraction(self):
+        """Scope qualifier helper functions work correctly."""
+        from northstar.audit import _extract_scope_qualifiers, _scopes_differ
+
+        prod_ctx = "Always ask for confirmation before modifying production files."
+        test_ctx = "For test files, proceed without asking."
+
+        qa = _extract_scope_qualifiers(prod_ctx)
+        qb = _extract_scope_qualifiers(test_ctx)
+
+        assert len(qa) > 0, "Should detect production scope"
+        assert len(qb) > 0, "Should detect test scope"
+        assert _scopes_differ(qa, qb), "Production and test scopes should differ"
+
+    def test_no_scope_qualifiers_same_scope(self):
+        """Text without scope qualifiers should not be treated as different scopes."""
+        from northstar.audit import _extract_scope_qualifiers, _scopes_differ
+
+        ctx_a = "Always ask for confirmation before modifying files."
+        ctx_b = "Modify files without asking when in autonomous mode."
+
+        qa = _extract_scope_qualifiers(ctx_a)
+        qb = _extract_scope_qualifiers(ctx_b)
+
+        # Neither has scope qualifiers, so _scopes_differ returns False
+        assert not _scopes_differ(qa, qb)
+
+
+class TestPreToolCallRemoved:
+    """Regression tests for pre_tool_call hook removal."""
+
+    def test_no_pre_tool_call_in_manifest(self):
+        """plugin.yaml should not advertise pre_tool_call."""
+        import yaml
+        manifest_path = Path(__file__).resolve().parent.parent / "plugin.yaml"
+        with open(manifest_path) as f:
+            manifest = yaml.safe_load(f)
+        hooks = manifest.get("provides_hooks", [])
+        assert "pre_tool_call" not in hooks
+
+    def test_no_pre_tool_call_registered(self):
+        """register() should not register pre_tool_call hook."""
+        from unittest.mock import MagicMock
+        import northstar
+
+        ctx = MagicMock()
+        northstar.register(ctx)
+
+        calls = ctx.register_hook.call_args_list
+        names = [c[0][0] for c in calls]
+        assert "pre_tool_call" not in names
+
+    def test_pre_tool_call_function_removed(self):
+        """_on_pre_tool_call should not exist in northstar module."""
+        import northstar
+        assert not hasattr(northstar, "_on_pre_tool_call")
+
+
+class TestEntrypointImportError:
+    """Regression tests for root __init__.py import error handling."""
+
+    def test_root_init_exists(self):
+        """Root __init__.py should exist and be importable."""
+        init_path = Path(__file__).resolve().parent.parent / "__init__.py"
+        assert init_path.exists()
+
+    def test_root_init_has_import_guard(self):
+        """Root __init__.py should have ImportError handling."""
+        init_path = Path(__file__).resolve().parent.parent / "__init__.py"
+        content = init_path.read_text()
+        assert "ImportError" in content
+        assert "northstar" in content
+
+
+class TestDemoExcludesReadme:
+    """Regression tests for demo fixture scanning."""
+
+    def test_demo_skips_readme(self):
+        """Demo should only scan synthetic instruction files, not README."""
+        from northstar.demo import main
+        from northstar.discovery import InstructionSource
+
+        fixture_dir = Path(__file__).resolve().parent.parent / "fixtures" / "conflicting-demo"
+        # Verify README exists but is excluded
+        readme = fixture_dir / "README.md"
+        assert readme.exists()
+
+        # The demo's INSTRUCTION_FILES set should not include README.md
+        # We verify by checking the demo source code
+        demo_path = Path(__file__).resolve().parent.parent / "northstar" / "demo.py"
+        demo_content = demo_path.read_text()
+        assert "README.md" not in demo_content.split("INSTRUCTION_FILES")[1].split("]")[0] if "INSTRUCTION_FILES" in demo_content else True
+
+
+class TestHookContract:
+    """Regression tests for pre_llm_call hook contract compliance."""
+
+    def test_hook_accepts_all_contract_params(self):
+        """Hook must accept all params from the Hermes contract."""
+        import northstar
+        from northstar import tools
+        tools._last_audit = None
+
+        # Full contract call — should not raise TypeError
+        result = northstar._on_pre_llm_call(
+            session_id="sess-123",
+            user_message="Test message",
+            conversation_history=[{"role": "user", "content": "Test"}],
+            is_first_turn=True,
+            model="anthropic/claude-sonnet-4-6",
+            platform="cli",
+            task_id="task-1",
+            turn_id="turn-1",
+            parent_session_id=None,
+            sender_id="user-1",
+        )
+        assert result is None  # No audit cached, so None
+
+    def test_hook_returns_context_dict(self):
+        """Hook must return {"context": "..."} not a plain string."""
+        import northstar
+        from northstar import tools
+        tools._last_audit = {
+            "findings": [
+                {"severity": "error", "category": "contradiction", "source_file": "/test.md", "explanation": "Test"}
+            ]
+        }
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=True,
+            model="test",
+            platform="cli",
+        )
+        assert isinstance(result, dict)
+        assert "context" in result
+        assert isinstance(result["context"], str)
+        assert len(result["context"]) > 0
+
+    def test_hook_returns_none_on_no_findings(self):
+        """Hook returns None when audit has no findings."""
+        import northstar
+        from northstar import tools
+        tools._last_audit = {"findings": []}
+
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=True,
+            model="test",
+            platform="cli",
+        )
+        assert result is None
+
+    def test_hook_returns_none_on_non_first_turn(self):
+        """Hook returns None on non-first turns."""
+        import northstar
+        from northstar import tools
+        tools._last_audit = {
+            "findings": [
+                {"severity": "error", "category": "contradiction", "source_file": "/test.md", "explanation": "Test"}
+            ]
+        }
+
+        result = northstar._on_pre_llm_call(
+            session_id="test",
+            user_message="Hello",
+            conversation_history=[],
+            is_first_turn=False,
+            model="test",
+            platform="cli",
+        )
+        assert result is None

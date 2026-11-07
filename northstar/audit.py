@@ -133,6 +133,78 @@ _CONTRADICTION_PAIRS = [
      r'(?:autonomous|without\s+human|without\s+user)'),
 ]
 
+# Scope qualifiers that indicate a directive applies to a specific context.
+# When both sides of a contradiction carry different scope qualifiers, the
+# directives govern different scopes and are NOT contradictory.
+_SCOPE_QUALIFIERS = [
+    r'(?:production|prod|live|main|release)\b',
+    r'(?:test|testing|spec|fixture)\b',
+    r'(?:staging|stage|pre[-\s]?prod)\b',
+    r'(?:development|dev|local)\b',
+    r'(?:configuration\s+file|config\s+file)\b',
+    r'(?:new\s+file|generated\s+file)\b',
+    r'(?:routine\s+task|autonom)',
+    r'(?:CI/CD|pipeline|build|deploy)\b',
+]
+
+
+def _extract_scope_qualifiers(text: str) -> list[str]:
+    """Extract scope qualifier patterns found in a text snippet."""
+    qualifiers = []
+    for pattern in _SCOPE_QUALIFIERS:
+        if re.search(pattern, text, re.IGNORECASE):
+            qualifiers.append(pattern)
+    return qualifiers
+
+
+def _scopes_differ(qualifiers_a: list[str], qualifiers_b: list[str]) -> bool:
+    """Return True if two sets of scope qualifiers are clearly different."""
+    if not qualifiers_a or not qualifiers_b:
+        return False
+    # If they share no qualifiers, they likely govern different scopes
+    return set(qualifiers_a).isdisjoint(set(qualifiers_b))
+
+
+def _get_line_context(content: str, match_start: int, window: int = 200) -> str:
+    """Get surrounding context for a regex match to check scope qualifiers.
+
+    Uses a line-level window: extracts the line containing the match plus
+    the immediately preceding and following lines. This prevents a single
+    short file from having both qualifiers in both contexts.
+    """
+    # Find the line boundaries around the match
+    before = content[:match_start]
+    after = content[match_start:]
+
+    # Go back to start of current line
+    line_start = before.rfind('\n')
+    if line_start == -1:
+        line_start = 0
+    else:
+        line_start += 1  # Skip the newline char
+
+    # Find end of current line
+    line_end = after.find('\n')
+    if line_end == -1:
+        line_end = len(after)
+    else:
+        line_end += len(before)
+
+    # Include one line before and after for context
+    prev_line_start = content[:line_start].rfind('\n')
+    if prev_line_start == -1:
+        prev_line_start = 0
+    else:
+        prev_line_start += 1
+
+    next_line_end = content[line_end:].find('\n')
+    if next_line_end == -1:
+        next_line_end = len(content)
+    else:
+        next_line_end = line_end + next_line_end
+
+    return content[prev_line_start:next_line_end]
+
 
 def check_duplicates(sources: list[InstructionSource]) -> list[Finding]:
     """Detect near-duplicate directives across sources."""
@@ -178,7 +250,13 @@ def check_duplicates(sources: list[InstructionSource]) -> list[Finding]:
 
 
 def check_contradictions(sources: list[InstructionSource]) -> list[Finding]:
-    """Detect contradictory directives across sources."""
+    """Detect contradictory directives across sources.
+
+    Scope-aware: when both sides of a contradiction carry different scope
+    qualifiers (e.g., 'production files' vs 'test files'), the finding is
+    downgraded to a warning with 'possible' confidence, indicating it may
+    require human review rather than being a definite error.
+    """
     findings = []
 
     for source in sources:
@@ -195,43 +273,118 @@ def check_contradictions(sources: list[InstructionSource]) -> list[Finding]:
                 allow_line = content[:content.lower().index(allow_match.group())].count('\n') + 1
                 deny_line = content[:content.lower().index(deny_match.group())].count('\n') + 1
 
-                findings.append(Finding(
-                    category="contradiction",
-                    severity="error",
-                    source_file=str(source.path),
-                    source_line=allow_line,
-                    evidence=f"'{allow_match.group()}' vs '{deny_match.group()}'",
-                    explanation="Contradictory directives found in the same file.",
-                    suggestion="Resolve the contradiction by choosing one directive and removing the other.",
-                    confidence="medium",
-                ))
+                # Scope analysis: check context around each match
+                allow_context = _get_line_context(content, allow_match.start())
+                deny_context = _get_line_context(content, deny_match.start())
+
+                qualifiers_a = _extract_scope_qualifiers(allow_context)
+                qualifiers_b = _extract_scope_qualifiers(deny_context)
+
+                if _scopes_differ(qualifiers_a, qualifiers_b):
+                    # Different scopes — likely not a real contradiction
+                    # Report as possible conflict requiring human review
+                    findings.append(Finding(
+                        category="contradiction",
+                        severity="warning",
+                        source_file=str(source.path),
+                        source_line=allow_line,
+                        evidence=f"'{allow_match.group()}' vs '{deny_match.group()}' (different scopes)",
+                        explanation=(
+                            "Possible contradiction with different scope qualifiers. "
+                            "The directives may govern different contexts and not actually conflict. "
+                            "Human review recommended."
+                        ),
+                        suggestion="Verify whether the directives apply to the same scope. If they govern different contexts, no action needed.",
+                        confidence="low",
+                    ))
+                else:
+                    # Same scope or no scope qualifiers — definite contradiction
+                    findings.append(Finding(
+                        category="contradiction",
+                        severity="error",
+                        source_file=str(source.path),
+                        source_line=allow_line,
+                        evidence=f"'{allow_match.group()}' vs '{deny_match.group()}'",
+                        explanation="Contradictory directives found in the same file.",
+                        suggestion="Resolve the contradiction by choosing one directive and removing the other.",
+                        confidence="medium",
+                    ))
 
     # Cross-file contradiction check
     source_contents = [(s, s.content.lower()) for s in sources if s.source_type == "instruction"]
     for i, (s1, c1) in enumerate(source_contents):
         for s2, c2 in source_contents[i+1:]:
             for allow_pattern, deny_pattern in _CONTRADICTION_PAIRS:
-                if re.search(allow_pattern, c1) and re.search(deny_pattern, c2):
+                allow_m1 = re.search(allow_pattern, c1)
+                deny_m2 = re.search(deny_pattern, c2)
+
+                if allow_m1 and deny_m2:
+                    # Check scope qualifiers
+                    ctx1 = _get_line_context(c1, allow_m1.start())
+                    ctx2 = _get_line_context(c2, deny_m2.start())
+                    qa = _extract_scope_qualifiers(ctx1)
+                    qb = _extract_scope_qualifiers(ctx2)
+
+                    if _scopes_differ(qa, qb):
+                        severity = "warning"
+                        confidence = "low"
+                        explanation = (
+                            "Possible cross-file contradiction with different scope qualifiers. "
+                            "The directives may govern different contexts and not actually conflict. "
+                            "Human review recommended."
+                        )
+                        suggestion = "Verify whether the directives apply to the same scope. If they govern different contexts, no action needed."
+                    else:
+                        severity = "error"
+                        confidence = "medium"
+                        explanation = "Cross-file contradiction: one file allows what another denies."
+                        suggestion = "Align directives across files or consolidate into a single authoritative source."
+
                     findings.append(Finding(
                         category="contradiction",
-                        severity="error",
+                        severity=severity,
                         source_file=str(s1.path),
                         source_line=None,
                         evidence=f"Allow directive in {s1.path.name} conflicts with deny directive in {s2.path.name}",
-                        explanation="Cross-file contradiction: one file allows what another denies.",
-                        suggestion="Align directives across files or consolidate into a single authoritative source.",
-                        confidence="medium",
+                        explanation=explanation,
+                        suggestion=suggestion,
+                        confidence=confidence,
                     ))
-                elif re.search(deny_pattern, c1) and re.search(allow_pattern, c2):
+
+                deny_m1 = re.search(deny_pattern, c1)
+                allow_m2 = re.search(allow_pattern, c2)
+
+                if deny_m1 and allow_m2:
+                    # Check scope qualifiers
+                    ctx1 = _get_line_context(c1, deny_m1.start())
+                    ctx2 = _get_line_context(c2, allow_m2.start())
+                    qa = _extract_scope_qualifiers(ctx1)
+                    qb = _extract_scope_qualifiers(ctx2)
+
+                    if _scopes_differ(qa, qb):
+                        severity = "warning"
+                        confidence = "low"
+                        explanation = (
+                            "Possible cross-file contradiction with different scope qualifiers. "
+                            "The directives may govern different contexts and not actually conflict. "
+                            "Human review recommended."
+                        )
+                        suggestion = "Verify whether the directives apply to the same scope. If they govern different contexts, no action needed."
+                    else:
+                        severity = "error"
+                        confidence = "medium"
+                        explanation = "Cross-file contradiction: one file denies what another allows."
+                        suggestion = "Align directives across files or consolidate into a single authoritative source."
+
                     findings.append(Finding(
                         category="contradiction",
-                        severity="error",
+                        severity=severity,
                         source_file=str(s2.path),
                         source_line=None,
                         evidence=f"Deny directive in {s1.path.name} conflicts with allow directive in {s2.path.name}",
-                        explanation="Cross-file contradiction: one file denies what another allows.",
-                        suggestion="Align directives across files or consolidate into a single authoritative source.",
-                        confidence="medium",
+                        explanation=explanation,
+                        suggestion=suggestion,
+                        confidence=confidence,
                     ))
 
     return findings
