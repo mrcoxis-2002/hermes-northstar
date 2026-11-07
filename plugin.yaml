@@ -1,0 +1,43 @@
+# Northstar — Coherence Engine for Hermes Agent
+# Detects contradictions, stale references, and redundant directives
+# across instruction sources, skills, and configuration.
+
+name: northstar
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >
+  Coherence engine for Hermes Agent. Scans instruction sources for
+  contradictions, duplicate directives, stale references, and
+  inconsistent operating constraints. Helps establish and enforce
+  a coherent set of operational rules.
+author: Reverb Software Solutions
+license: MIT
+homepage: https://github.com/reverb-ss/hermes-northstar
+tags: [coherence, audit, guardrails, instructions, conflicts]
+
+provides_tools:
+  - northstar_audit
+  - northstar_status
+
+provides_hooks:
+  - pre_tool_call  # Registered but inactive for MVP (enforcement not yet implemented)
+  - pre_llm_call
+
+config_schema:
+  scan_dirs:
+    type: list
+    default: []
+    description: "Additional directories to scan for instruction files (relative to Hermes home)"
+  enforce_mode:
+    type: str
+    default: "off"
+    description: "Enforcement mode: off, warn, block"
+  protected_paths:
+    type: list
+    default: []
+    description: "File paths that require approval when enforce_mode is active"
+  max_pre_llm_chars:
+    type: int
+    default: 2000
+    description: "Max characters for pre_llm_call guidance injection"

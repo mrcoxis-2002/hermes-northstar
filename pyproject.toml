@@ -1,0 +1,13 @@
+[project]
+name = "hermes-northstar"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Root __init__.py is the plugin entrypoint with relative imports — don't import it as a test module
+addopts = "--ignore=__init__.py"
