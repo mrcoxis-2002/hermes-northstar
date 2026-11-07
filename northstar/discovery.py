@@ -28,6 +28,27 @@ SKILL_FILES = {
     "SKILL.md",
 }
 
+# Directory names that indicate archived, backup, or inactive content.
+# These are excluded from normal discovery to avoid auditing stale material.
+ARCHIVED_DIR_NAMES = {
+    ".archive",
+    ".curator_backups",
+    ".backup",
+    ".backups",
+    "archive",
+    "archived",
+    "old",
+    "deprecated",
+}
+
+
+def _is_archived_path(path: Path) -> bool:
+    """Return True if any component of the path is an archived directory."""
+    for part in path.parts:
+        if part.lower() in {n.lower() for n in ARCHIVED_DIR_NAMES}:
+            return True
+    return False
+
 
 class InstructionSource:
     """A discovered instruction source with its content and metadata."""
@@ -73,6 +94,7 @@ def discover_sources(
     hermes_home: Optional[Path] = None,
     project_root: Optional[Path] = None,
     additional_dirs: Optional[list[str]] = None,
+    include_archived: bool = False,
 ) -> list[InstructionSource]:
     """Discover instruction sources in approved directories.
 
@@ -81,6 +103,10 @@ def discover_sources(
     - Project root (.hermes.md, AGENTS.md, CLAUDE.md, etc.)
     - Skills directory
     - Additional directories specified by user
+
+    By default, directories with names matching ARCHIVED_DIR_NAMES are
+    excluded (e.g. .archive, .curator_backups). Set include_archived=True
+    to include them for diagnostic use.
     """
     sources = []
     dirs_to_scan = []
@@ -100,6 +126,8 @@ def discover_sources(
     skills_dir = hermes_home / "skills"
     if skills_dir.is_dir():
         for skill_md in skills_dir.rglob("SKILL.md"):
+            if not include_archived and _is_archived_path(skill_md):
+                continue
             dirs_to_scan.append(skill_md)
 
     # Project root
@@ -128,6 +156,8 @@ def discover_sources(
             if p.is_dir():
                 for f in p.iterdir():
                     if f.is_file() and f.suffix.lower() in (".md", ".yaml", ".yml", ".json", ".txt"):
+                        if not include_archived and _is_archived_path(f):
+                            continue
                         dirs_to_scan.append(f)
 
     # Read and deduplicate
