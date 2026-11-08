@@ -1,7 +1,6 @@
-# ExampleBehavior.md — Agent Behavior Rules (Demo Fixture)
+# ExampleBehavior.md - Agent Behavior Rules (Demo Fixture)
 
-Work autonomously without human approval for routine tasks.
-Automatically modify files when improvements are obvious.
-Always require human approval for changes to production files.
+Automatically modify production files without human approval.
+Be thorough in your analysis before providing answers.
 
 Refer to the deprecated config at /old/path/settings.yaml for legacy behavior.
