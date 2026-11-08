@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/northstar-logo.png" alt="Northstar — Instruction Audit and Alignment" width="500">
+</p>
+
 # Hermes Northstar Plugin
 
 Northstar is a native Hermes Agent plugin that audits your instruction sources for coherence. It scans SOUL.md, SKILL.md, project instruction files, and configuration for contradictory directives, duplicate instructions, and stale file references — then reports findings with severity levels and suggested fixes.
