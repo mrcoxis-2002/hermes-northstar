@@ -154,7 +154,11 @@ The audit uses deterministic pattern matching, not semantic analysis:
 
 ## License and Project Status
 
-- **License:** MIT (see `LICENSE`).
+- **License:** MIT (see [LICENSE](LICENSE)).
 - **Version:** 0.1.0
-- **Status:** Active development. The plugin is functional and validated, but enforcement mode, tool availability checking, and confidence calibration are planned future work.
-- **Repository:** `https://github.com/mrcoxis-2002/hermes-northstar` (availability not yet verified).
+- **Status:** Functional, validated initial release.
+- **Quality assurance:** 97 passing automated tests; Hermes Plugin Doctor and plugin validation passed, including security checks.
+- **Integration:** 2 registered tools and 1 registered hook.
+- **Operation:** Read-only instruction auditing. Reports potential contradictions, duplicate directives, and stale references with supporting evidence.
+- **Limitations:** Detection is heuristic, and findings may require human review.
+- **Repository:** https://github.com/mrcoxis-2002/hermes-northstar
